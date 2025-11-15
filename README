@@ -1,0 +1,26 @@
+
+This shar file contains the source to "sit" a UNIX utility which produces
+Stuffit archives for downloading to the mac.  As a bonus I've also included
+"macbinfilt", a filter which takes articles from comp.binaries.mac, puts the
+parts in the correct order, and throws out all the "noise" lines.
+
+To use the sit code you need the getopt(3) library routine and the compress(1)
+utility, both of which most everyone seems to have by now.
+
+There is not much original code here: everything is reverse engineered from
+the unsit utility by Alan Weber.  The updcrc.c file is exactly the same file
+from the unsit package.
+
+I've tested the code on both BSD and SYSV machines. Both machines were big
+endian so byte order problems may still be lurking.
+
+When you transfer archives to your mac be sure to use "binary" mode.  In 
+order for Suffit to recognize your downloaded file it must have a type of
+"SIT!".  If your communication program doesn't allow you to specify the type
+you'll need to ResEdit it in.  It should be quite simple to modify sit.c
+to put a MacBinary header on the archive.
+
+As with everything in the modern world: use at your own risk.
+
+--Tom Bereiter
+  ..!{rutgers,ames}!cs.utexas.edu!halley!rolex!twb
