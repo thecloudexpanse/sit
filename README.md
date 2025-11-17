@@ -46,3 +46,45 @@ This version of `sit` has been enhanced to work on Linux and other Unix systems.
 
 This is a bare-bones "C" command-line tool. With Xcode's CLTools support installed on macOS, you should be able to build the tool by typing `make` while the `sit` directory is the current directory.
 
+---
+
+## macbinfilt
+
+**Filter and reassemble BinHex files from Usenet**
+
+`macbinfilt` is a companion utility for processing Mac binary files posted to Usenet newsgroups, particularly comp.binaries.mac. In the 1980s and 1990s, Mac software was commonly distributed through Usenet in BinHex 4.0 format, often split across multiple article parts.
+
+**What it does:**
+
+- Filters Usenet article text to extract BinHex-encoded data
+- Automatically reorders multi-part articles if parts arrive out of sequence
+- Strips extraneous headers, signatures, and non-BinHex content
+- Outputs clean BinHex data ready for decoding with `xbin` or similar tools
+
+**Usage:**
+
+```bash
+# Process a single article or file
+macbinfilt article.txt > output.hqx
+
+# Process multiple parts (will reorder automatically)
+macbinfilt part1.txt part3.txt part2.txt > complete.hqx
+
+# Process from stdin (e.g., from a newsreader)
+cat article.txt | macbinfilt > output.hqx
+```
+
+**When to use it:**
+
+- You're working with historical Mac software archives from Usenet
+- You need to extract BinHex data from articles with headers and footers
+- You received multi-part articles out of order and need them reassembled
+- You're processing comp.binaries.mac archives
+
+**Notes:**
+
+- `macbinfilt` looks for lines containing the text "part N of M" to identify multi-part files
+- Missing parts will be reported as errors
+- Output always begins with the BinHex signature: `(This file must be converted with BinHex 4.0)`
+- The filtered output can then be decoded using BinHex decoders like `xbin`
+
