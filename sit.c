@@ -216,18 +216,19 @@ int put_folder(char *name, int level)
 {
 	DIR *dir;
 	struct dirent *entry;
-    char path[BUFSIZ];
+	char path[BUFSIZ];
 	int i, n = 0;
 
-	if (!(dir = opendir(name)))
+	if (!(dir = opendir(name))) {
 		return 0;
-
+	}
 	while ((entry = readdir(dir)) != NULL) {
 		snprintf(path, sizeof(path), "%s/%s", name, entry->d_name);
 		if (entry->d_type == DT_DIR) { /* if it's a directory */
 			long startPos = lseek(ofd,0,1); /* remember where we are */
-			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
 				continue;
+			}
 			if (verbose>1) {
 				for (i=0;i<level;i++) { fprintf(stdout, "  "); }
 				fprintf(stdout, "+ %s (directory)\n", entry->d_name);
@@ -236,6 +237,13 @@ int put_folder(char *name, int level)
 			n += put_folder(path,level+1); /* recursion! */
 			n += put_folder_entry(path,startPos,endFolder,level);
 		} else {
+			if (strcmp(entry->d_name, ".DS_Store") == 0) { /* skip .DS_Store files */
+				if (verbose>1) {
+					for (i=0;i<level;i++) { fprintf(stdout, "  "); }
+					fprintf(stdout, "! %s (skipped)\n", entry->d_name);
+				}
+				continue;
+			}
 			if (verbose>1) {
 				for (i=0;i<level;i++) { fprintf(stdout, "  "); }
 				fprintf(stdout, "+ %s\n", entry->d_name);
@@ -440,6 +448,7 @@ int put_file(char *name, int level)
 		strncpy(nbuf+4,"/",1);
 		strncpy(nbuf+5,fh.fCreator,4);
 		strncpy(nbuf+9,"\0",1);
+		if (verbose>1) { for (i=0;i<level;i++) { fprintf(stdout, "  "); } }
 		fprintf(stdout, "%s (%lld bytes) Data:%lld Rsrc:%lld [%s]\n",
 				name,(long long)dlen+rlen,(long long)dlen,(long long)rlen,nbuf);
 	}
