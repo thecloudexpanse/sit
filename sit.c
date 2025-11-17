@@ -61,13 +61,13 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <time.h>
 #ifdef BSD
 #include <sys/time.h>
 #include <sys/timeb.h>
-#else
-#include <time.h>
 #endif
 #include "sit.h"
+#include "appledouble.h"
 
 #ifndef min
 #define min(a,b) ((a)<(b)?(a):(b))
@@ -75,6 +75,26 @@
 
 /* Mac time of 00:00:00 GMT, Jan 1, 1970 */
 #define TIMEDIFF 0x7c25b080
+
+/* Platform compatibility macros */
+#ifdef __APPLE__
+#define HAVE_BIRTHTIME 1
+#define HAVE_NAMEDFORK 1
+#endif
+
+/* Get timezone offset portably */
+static long get_timezone_offset(void) {
+#if defined(BSD) || defined(__GLIBC__)
+    time_t now;
+    struct tm *tm;
+    time(&now);
+    tm = localtime(&now);
+    return tm->tm_gmtoff + (tm->tm_isdst ? 3600 : 0);
+#else
+    /* Fallback: assume UTC */
+    return 0;
+#endif
+}
 
 struct sitHdr sh;
 struct fileHdr fh;
@@ -302,17 +322,14 @@ int put_folder_entry(char *name, long startPos, int mtype, int level)
 	}
 	strncpy((char*)&fh.fName[1],fname,63); fh.fName[0] = min(strlen(fname),63);
 	ctime = st.st_ctime; /* ctime is really "time of last inode status change" */
+#ifdef HAVE_BIRTHTIME
 	ctime = st.st_birthtime; /* actual creation time is found in "birthtime" */
+#endif
 	mtime = st.st_mtime;
 	/* convert unix file time to mac time format */
-	time(&bs);
-	tp = localtime(&bs);
-	tdiff = TIMEDIFF + tp->tm_gmtoff;
-	if (tp->tm_isdst)
-		tdiff += 60 * 60;
+	tdiff = TIMEDIFF + get_timezone_offset();
 	cp4(ctime + tdiff,(char*)fh.cDate);
 	cp4(mtime + tdiff,(char*)fh.mDate);
-
 	fh.compRMethod = fh.compDMethod = mtype;
 	cp4(fpos1-startPos,(char*)fh.dLen);
 	cp4(fpos1-startPos,(char*)fh.cDLen);
@@ -355,28 +372,56 @@ int put_file(char *name, int level)
 	bzero(&fh,sizeof(fh));
 	write(ofd,&fh,sizeof(fh));
 
-	/* look for resource fork */
-	strcpy(nbuf,name);
-	strcat(nbuf,".rsrc");
-	if (!(stat(nbuf,&st)==0 && st.st_size)) { /* no .rsrc file */
-		strcpy(nbuf,name);
-		strcat(nbuf,"/..namedfork/rsrc"); /* try named fork */
-		if (!(stat(nbuf,&st)==0)) {
-			st.st_size = 0;
+	/* look for resource fork - try multiple methods */
+	rlen = 0;
+
+	/* Method 1: Try AppleDouble sidecar file */
+	rlen = get_appledouble_rsrc_size(name);
+	if (rlen > 0) {
+		/* Write resource fork data and calculate CRC */
+		clen = read_appledouble_rsrc_with_crc(name, ofd, &crc, updcrc);
+		if (clen != rlen) {
+			fprintf(stderr, "Warning: resource fork size mismatch for %s\n", name);
 		}
-	}
-	rlen = st.st_size;
-	if (st.st_size) {		/* resource fork exists */
-		dofork(nbuf,0);
-		cp4(st.st_size,(char*)fh.rLen);
-		cp4(clen,(char*)fh.cRLen);
-		cp2(crc,(char*)fh.rsrcCRC);
+		cp4(rlen, (char*)fh.rLen);
+		cp4(clen, (char*)fh.cRLen);
+		cp2(crc, (char*)fh.rsrcCRC);
 		fh.compRMethod = noComp;
 		fork++;
 	}
-	strcpy(nbuf,name);
-	strcat(nbuf,".rsrc");
-	if (rmfiles) unlink(nbuf);	/* ignore errors */
+
+	/* Method 2: Try legacy .rsrc file */
+	if (rlen == 0) {
+		strcpy(nbuf,name);
+		strcat(nbuf,".rsrc");
+		if (stat(nbuf,&st)==0 && st.st_size) {
+			rlen = st.st_size;
+			dofork(nbuf,0);
+			cp4(st.st_size,(char*)fh.rLen);
+			cp4(clen,(char*)fh.cRLen);
+			cp2(crc,(char*)fh.rsrcCRC);
+			fh.compRMethod = noComp;
+			fork++;
+		}
+		if (rmfiles) unlink(nbuf);	/* ignore errors */
+	}
+
+#ifdef HAVE_NAMEDFORK
+	/* Method 3: Try macOS named fork */
+	if (rlen == 0) {
+		strcpy(nbuf,name);
+		strcat(nbuf,"/..namedfork/rsrc");
+		if (stat(nbuf,&st)==0 && st.st_size) {
+			rlen = st.st_size;
+			dofork(nbuf,0);
+			cp4(st.st_size,(char*)fh.rLen);
+			cp4(clen,(char*)fh.cRLen);
+			cp2(crc,(char*)fh.rsrcCRC);
+			fh.compRMethod = noComp;
+			fork++;
+		}
+	}
+#endif
 
 	/* look for data fork */
 	strcpy(nbuf,name);
@@ -411,30 +456,44 @@ int put_file(char *name, int level)
 		strncpy((char*)fh.cDate, ih.ctime, 4);
 		strncpy((char*)fh.mDate, ih.mtime, 4);
 	}
-	else {	/* no info file, so try to use info from rsrc, else fake it */
+	else {	/* no info file, so try to use info from rsrc/AppleDouble, else fake it */
 		char *fName = basename(name);
+		AppleDoubleMetadata ad_meta;
+		int have_metadata = 0;
+
 		if (!fName) fName = name;
 		strncpy((char*)&fh.fName[1],fName,63); fh.fName[0] = min(strlen(fName),63);
 		/* default to LSC text file */
 		strncpy((char*)fh.fType, Type ? Type : "TEXT", 4);
 		strncpy((char*)fh.fCreator, Creator ? Creator : "KAHL", 4);
-		/* now try to read the actual type and creator from named fork */
-		strcpy(nbuf,name);
-		strcat(nbuf,"/..namedfork/rsrc");
-		if (rlen && (fd=open(nbuf,0))>=0 && read(fd,&rh,sizeof(rh))==sizeof(rh)) {
-			strncpy((char*)fh.fType, rh.type, 4);
-			strncpy((char*)fh.fCreator, rh.creator, 4);
-			strncpy((char*)fh.FndrFlags, rh.fdflags, 2);
+
+		/* Try AppleDouble metadata first */
+		if (read_appledouble_metadata(name, &ad_meta) == 0) {
+			strncpy((char*)fh.fType, ad_meta.type, 4);
+			strncpy((char*)fh.fCreator, ad_meta.creator, 4);
+			strncpy((char*)fh.FndrFlags, ad_meta.flags, 2);
+			have_metadata = 1;
 		}
+#ifdef HAVE_NAMEDFORK
+		/* Try reading from macOS named fork if AppleDouble didn't work */
+		if (!have_metadata) {
+			strcpy(nbuf,name);
+			strcat(nbuf,"/..namedfork/rsrc");
+			if (rlen && (fd=open(nbuf,0))>=0 && read(fd,&rh,sizeof(rh))==sizeof(rh)) {
+				strncpy((char*)fh.fType, rh.type, 4);
+				strncpy((char*)fh.fCreator, rh.creator, 4);
+				strncpy((char*)fh.FndrFlags, rh.fdflags, 2);
+				have_metadata = 1;
+			}
+		}
+#endif
 		ctime = st.st_ctime; /* ctime is really "time of last inode status change" */
+#ifdef HAVE_BIRTHTIME
 		ctime = st.st_birthtime; /* actual creation time is found in "birthtime" */
+#endif
 		mtime = st.st_mtime;
 		/* convert unix file time to mac time format */
-		time(&bs);
-		tp = localtime(&bs);
-		tdiff = TIMEDIFF + tp->tm_gmtoff;
-		if (tp->tm_isdst)
-			tdiff += 60 * 60;
+		tdiff = TIMEDIFF + get_timezone_offset();
 		cp4(ctime + tdiff, (char*)fh.cDate);
 		cp4(mtime + tdiff, (char*)fh.mDate);
 	}

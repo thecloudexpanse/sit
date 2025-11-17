@@ -38,6 +38,10 @@ This program is known to compile and run on macOS systems (Snow Leopard 10.6 or 
 
 This software may contain bugs. Use at your own risk.
 
+**Linux and Cross-Platform Support**
+
+This version of `sit` has been enhanced to work on Linux and other Unix systems. On non-macOS platforms, resource forks and file metadata can be provided using the AppleDouble file format in both `._filename` or `.rsrc` sidecars.
+
 **Building**
 
 This is a bare-bones "C" command-line tool. With Xcode's CLTools support installed on macOS, you should be able to build the tool by typing `make` while the `sit` directory is the current directory.
