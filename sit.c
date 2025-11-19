@@ -127,12 +127,12 @@ int ofd;
 ushort crc;
 size_t clen;
 int rmfiles;
-int	unixf;
+int unixf;
 int verbose;
 char *Creator, *Type;
 
 static void usage(char *arg0) {
-	fprintf(stderr,"Usage: %s ", arg0);
+    fprintf(stderr, "Usage: %s ", arg0);
     fprintf(stderr, "[-v] [-u] [-T type] [-C creator] [-o dstfile] file ...\n");
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -v           Verbose output (can specify more than once for extra info)\n");
@@ -146,7 +146,7 @@ static void usage(char *arg0) {
     fprintf(stderr, "  %s file1 file2 file3\n", arg0);
     fprintf(stderr, "  # create \"FolderArchive.sit\" containing FolderToBeArchived\n");
     fprintf(stderr, "  %s -o FolderArchive.sit FolderToBeArchived\n", arg0);
-fprintf(stderr, "  # specify that untyped files are JPEG and open in GraphicConverter\n");
+    fprintf(stderr, "  # specify that untyped files are JPEG and open in GraphicConverter\n");
     fprintf(stderr, "  %s -o jpgArchive.sit -T JPEG -C GKON *.jpg\n", arg0);
 }
 extern char *optarg;
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
 		usage(argv[0]);
 		exit(1);
 	}
-    while ((c=getopt(argc, argv, "o:uvC:T:h")) != EOF)
+	while ((c=getopt(argc, argv, "o:uvC:T:h")) != EOF)
 	switch (c) {
 		case 'r':		/* REMOVED! 'r' option is too easily confused with 'recursive' */
 			usage(argv[0]);
@@ -223,11 +223,11 @@ int main(int argc, char **argv) {
 
 	total += sizeof(sh);
 	/* header header */
-    strncpy((char*)sh.sig1,"SIT!",4);
-    cp2(items,(char*)sh.numFiles);
-    cp4(total,(char*)sh.arcLen);
-    strncpy((char*)sh.sig2,"rLau",4);
-    sh.version = 1;
+	strncpy((char*)sh.sig1,"SIT!",4);
+	cp2(items,(char*)sh.numFiles);
+	cp4(total,(char*)sh.arcLen);
+	strncpy((char*)sh.sig2,"rLau",4);
+	sh.version = 1;
 
 	if (safe_write(ofd, &sh, sizeof sh, "final archive header") < 0) {
 		exit(1);
@@ -272,9 +272,9 @@ int put_folder(char *name, int level) {
 		struct stat entry_st;
 
 		/* Skip . and .. */
-		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
 			continue;
-
+        }
 		if (snprintf(path, sizeof(path), "%s/%s", name, entry->d_name) >= sizeof(path)) {
 			fprintf(stderr, "Warning: path too long, skipping: %s/%s\n", name, entry->d_name);
 			continue;
@@ -332,6 +332,8 @@ int put_folder_entry(char *name, long startPos, int mtype, int level) {
 
 	   That total is then written to the startFolder entry's cDLen and dlen fields,
 	   which will both be the the same value if we aren't compressing anything.
+	   When compression is reimplemented, we'll need to keep track of the
+	   uncompressed data length separately and provide it to this function.
 	 */
 	struct stat st;
 	int i;
