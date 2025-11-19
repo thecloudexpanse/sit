@@ -1,11 +1,12 @@
 
-all:	sit macbinfilt
-
-sit:	sit.o updcrc.o
-	cc -o sit sit.o updcrc.o
-
-macbinfilt: macbinfilt.o
-	cc -o macbinfilt macbinfilt.o
+all: sit macbinfilt
 
 clean:
-	rm sit.o updcrc.o sit macbinfilt
+	rm -f sit macbinfilt
+	rm -f *.o
+
+sit: sit.o updcrc.o appledouble.o
+	$(CC) -o $@ $^
+
+macbinfilt: macbinfilt.c
+	$(CC) -o $@ $^
