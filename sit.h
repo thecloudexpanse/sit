@@ -94,7 +94,7 @@ typedef struct __attribute__((aligned(2), packed)) fileHdr {	/* 112 bytes */
 /* compression methods */
 #define noComp	0	/* just read each byte and write it to archive */
 #define repComp 1	/* RLE compression */
-#define lpzComp 2	/* LZW compression */
+#define lzwComp 2	/* LZW compression */
 #define hufComp 3	/* Huffman compression */
 
 #define encrypted 16	/* bit set if encrypted.  ex: encrypted+lpzComp */

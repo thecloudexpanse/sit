@@ -70,6 +70,7 @@
 #endif
 #include "sit.h"
 #include "appledouble.h"
+#include "zopen.h"
 
 /* Type compatibility for non-BSD systems */
 #ifndef ushort
@@ -82,6 +83,8 @@ typedef unsigned short ushort;
 
 /* Mac time of 00:00:00 GMT, Jan 1, 1970 */
 #define TIMEDIFF 0x7c25b080
+
+#define ENABLE_LZW_COMPRESSION 1
 
 /* Platform compatibility macros */
 #ifdef __APPLE__
@@ -125,7 +128,6 @@ char buf[BUFSIZ]; /* BUFSIZ is defined in <stdio.h> as 1024 */
 char *defoutfile = "archive.sit";
 int ofd;
 ushort crc;
-size_t clen;
 int rmfiles;
 int unixf;
 int verbose;
@@ -154,17 +156,17 @@ extern int optind;
 
 /* function declarations */
 extern ushort updcrc(ushort icrc, unsigned char *icp, int icnt);
-int put_item(char *name);
-int put_folder(char *name, int level);
-int put_folder_entry(char *name, long startPos, int mtype, int level);
-int put_file(char *name, int level);
-int dofork(char *name, int convert);
+off_t put_item(char *name, off_t *uncompressed);
+off_t put_folder(char *name, off_t *uncompressed, int level);
+off_t put_folder_entry(char *name, off_t startPos, off_t *unCmpLen, int mtype, int level);
+off_t put_file(char *name, off_t *uncompressed, int level);
+off_t dofork(char *name, int convert);
 void cp2(uint16_t x, char *dest);
 void cp4(uint32_t x, char *dest);
 
 int main(int argc, char **argv) {
-	int i,n;
-	int total=0, items=0;
+	int i;
+	off_t total=0, uncompressed=0, items=0;
 	int c;
 
 	if (argc < 2) {
@@ -208,20 +210,26 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 	/* empty header, will seek back and fill in later */
-	if (safe_write(ofd, &sh, sizeof sh, "archive header") < 0) {
+	if (safe_write(ofd, &sh, sizeof(sh), "archive header") < 0) {
 		exit(1);
+	}
+	if (verbose>2) {
+		fprintf(stdout, "* archive header (%lld bytes)\n",
+				(long long)sizeof(sh));
 	}
 
 	for (i=optind; i<argc; i++) {
-		n = put_item(argv[i]);
+		off_t n, len;
+		n = put_item(argv[i],&len);
 		if (n) {
 			total += n;
 			items += 1;
+			uncompressed += len;
 		}
 	}
-	lseek(ofd,0,0);
-
 	total += sizeof(sh);
+	uncompressed += sizeof(sh);
+
 	/* header header */
 	strncpy((char*)sh.sig1,"SIT!",4);
 	cp2(items,(char*)sh.numFiles);
@@ -229,7 +237,8 @@ int main(int argc, char **argv) {
 	strncpy((char*)sh.sig2,"rLau",4);
 	sh.version = 1;
 
-	if (safe_write(ofd, &sh, sizeof sh, "final archive header") < 0) {
+	lseek(ofd,0,0);
+	if (safe_write(ofd, &sh, sizeof(sh), "final archive header") < 0) {
 		exit(1);
 	}
 	if (close(ofd) < 0) {
@@ -237,29 +246,37 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
 	if (verbose) {
-		fprintf(stdout, "Wrote %d bytes to \"%s\"\n",total,defoutfile);
+		fprintf(stdout, "Wrote %lld bytes to \"%s\"\n",(long long)total,defoutfile);
+		if (verbose>2) {
+			fprintf(stdout, "Compressed: %lld bytes, Uncompressed: %lld bytes\n",
+					(long long)total,(long long)uncompressed);
+		}
+		fprintf(stdout, "Savings: %lld%%\n",
+				(long long)100-((total*100)/uncompressed));
 	}
 }
 
-int put_item(char *name) {
-	int n = 0;
+off_t put_item(char *name, off_t *uncompressed) {
 	struct stat st;
+	off_t n = 0; /* total compressed bytes of item */
+	*uncompressed = 0; /* total uncompressed bytes of item */
+
 	if (lstat(name,&st)==0 && S_ISDIR(st.st_mode)) {
 		/* this is a directory. */
-		long startPos = lseek(ofd,0,1); /* remember where we are */
+		off_t startPos = lseek(ofd,0,1); /* remember where we are */
 		if (verbose>1) { fprintf(stdout, "+ %s (directory)\n", basename(name)); }
-		n += put_folder_entry(name,startPos,startFolder,0);
-		n += put_folder(name,1);
-		n += put_folder_entry(name,startPos,endFolder,0);
+		n += put_folder_entry(name,startPos,uncompressed,startFolder,0);
+		n += put_folder(name,uncompressed,1);
+		n += put_folder_entry(name,startPos,uncompressed,endFolder,0);
 	}
 	else {
 		if (verbose>1) { fprintf(stdout, "+ %s\n", name); }
-		n += put_file(name,0);
+		n += put_file(name,uncompressed,0);
 	}
 	return n;
 }
 
-int put_folder(char *name, int level) {
+off_t put_folder(char *name, off_t *uncompressedLen, int level) {
 	DIR *dir;
 	struct dirent *entry;
 	char path[PATH_MAX];
@@ -270,31 +287,30 @@ int put_folder(char *name, int level) {
 	}
 	while ((entry = readdir(dir)) != NULL) {
 		struct stat entry_st;
+		off_t uncompressedEntryLen = 0;
 
 		/* Skip . and .. */
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
 			continue;
-        }
+		}
 		if (snprintf(path, sizeof(path), "%s/%s", name, entry->d_name) >= sizeof(path)) {
 			fprintf(stderr, "Warning: path too long, skipping: %s/%s\n", name, entry->d_name);
 			continue;
 		}
-
 		/* Use lstat to check if it's a directory (portable) */
 		if (lstat(path, &entry_st) != 0) {
 			perror(path);
 			continue;
 		}
-
 		if (S_ISDIR(entry_st.st_mode)) { /* if it's a directory */
-			long startPos = lseek(ofd,0,1); /* remember where we are */
+			off_t startPos = lseek(ofd,0,1); /* remember where we are */
 			if (verbose>1) {
 				for (i=0;i<level;i++) { fprintf(stdout, "  "); }
 				fprintf(stdout, "+ %s (directory)\n", entry->d_name);
 			}
-			n += put_folder_entry(path,startPos,startFolder,level);
-			n += put_folder(path,level+1); /* recursion! */
-			n += put_folder_entry(path,startPos,endFolder,level);
+			n += put_folder_entry(path,startPos,&uncompressedEntryLen,startFolder,level);
+			n += put_folder(path,&uncompressedEntryLen,level+1); /* recursion! */
+			n += put_folder_entry(path,startPos,&uncompressedEntryLen,endFolder,level);
 		} else {
 			if (strcmp(entry->d_name, ".DS_Store") == 0) { /* skip .DS_Store files */
 				if (verbose>1) {
@@ -307,33 +323,37 @@ int put_folder(char *name, int level) {
 				for (i=0;i<level;i++) { fprintf(stdout, "  "); }
 				fprintf(stdout, "+ %s\n", entry->d_name);
 			}
-			n += put_file(path,level);
+			n += put_file(path,&uncompressedEntryLen,level);
 		}
+		*uncompressedLen += uncompressedEntryLen;
 	}
 	closedir(dir);
 	return n;
 }
 
-int put_folder_entry(char *name, long startPos, int mtype, int level) {
-	/* This function adds the special startFolder and endFolder entries that
-	   StuffIt uses to bracket the contents of a directory.
+/* put_folder_entry returns the compressed length of this entry's contents.
+ * The uncompressed length is added to the value in the output argument.
+ */
+off_t put_folder_entry(char *name, off_t startPos, off_t *uncompressedLen, int mtype, int level) {
+	/* This function adds the special startFolder and endFolder entries
+	   that StuffIt uses to bracket the contents of a directory.
 
-	   When mtype is startFolder, the supplied startPos is our current position,
-	   where we are about to write the startFolder entry.
+	   When mtype is startFolder, the supplied startPos is our current
+	   position, where we are about to write the startFolder entry. The
+	   return and output values will simply be the constant length of the
+	   startFolder header.
 
 	   When mtype is endFolder, startPos is the beginning of the matching
-	   startFolder entry. The difference between the end of that startFolder entry
-	   and the end of the endFolder entry gives us the total bytes that we added
-	   with this folder. (We are supposed to exclude the startFolder entry itself,
-	   but include the endFolder.) Note that we actually use the beginning of the
-	   startFolder and the beginning of the endFolder, because we already have
-	   those offsets and their difference is the same number of bytes due to the
-	   folder entries being the same length.
+	   startFolder entry. The difference between the end of that startFolder
+	   entry and the end of the endFolder entry gives us the total compressed
+	   bytes that we added with this folder. (We are supposed to exclude the
+	   startFolder entry itself, but include the endFolder.) Note that we
+	   actually use the beginning of the startFolder and the beginning of the
+	   endFolder, because we already have those offsets and their difference
+	   is the same number of bytes due to the headers being the same length.
 
-	   That total is then written to the startFolder entry's cDLen and dlen fields,
-	   which will both be the the same value if we aren't compressing anything.
-	   When compression is reimplemented, we'll need to keep track of the
-	   uncompressed data length separately and provide it to this function.
+	   The compressed total is then written to the startFolder entry's cDLen
+	   field. The uncompressed total is written to the dLen field.
 	 */
 	struct stat st;
 	int i;
@@ -363,8 +383,9 @@ int put_folder_entry(char *name, long startPos, int mtype, int level) {
 	if (!fname) fname = name;
 	if (verbose>2) {
 		for (i=0;i<level;i++) { fprintf(stdout, "  "); }
-		fprintf(stdout, "* %sFolder for %s\n",
-				(mtype==startFolder) ? "start" : "end", fname);
+		fprintf(stdout, "* %sFolder for %s (%lld bytes)\n",
+				(mtype==startFolder) ? "start" : "end", fname,
+				(long long)sizeof(fh));
 	}
 	strncpy((char*)&fh.fName[1],fname,63); fh.fName[0] = min(strlen(fname),63);
 	ctime = st.st_ctime; /* ctime is really "time of last inode status change" */
@@ -377,9 +398,14 @@ int put_folder_entry(char *name, long startPos, int mtype, int level) {
 	cp4(ctime + tdiff,(char*)fh.cDate);
 	cp4(mtime + tdiff,(char*)fh.mDate);
 	fh.compRMethod = fh.compDMethod = mtype;
-	cp4(fpos1-startPos,(char*)fh.dLen);
-	cp4(fpos1-startPos,(char*)fh.cDLen);
+	cp4(*uncompressedLen,(char*)fh.dLen);
+	cp4(fpos1-startPos,(char*)fh.cDLen); /* 0 if startFolder */
 
+	if (verbose>2 /*&& mtype==endFolder*/) {
+		for (i=0;i<level;i++) { fprintf(stdout, "  "); }
+		fprintf(stdout, "* compressed:%lld, uncompressed:%lld\n",
+				(long long)(fpos1-startPos),(long long)*uncompressedLen);
+	}
 	crc = updcrc(0,(unsigned char*)&fh,(sizeof(fh))-2);
 	cp2(crc,(char*)fh.hdrCRC);
 
@@ -393,6 +419,7 @@ int put_folder_entry(char *name, long startPos, int mtype, int level) {
 	}
 	if (mtype==endFolder) {
 		fh.compRMethod = fh.compDMethod = startFolder; /* fix up startFolder entry */
+		cp4(*uncompressedLen,(char*)fh.dLen);
 		crc = updcrc(0,(unsigned char*)&fh,(sizeof(fh))-2);
 		cp2(crc,(char*)fh.hdrCRC);
 		if (lseek(ofd,startPos,SEEK_SET) < 0) {
@@ -407,11 +434,16 @@ int put_folder_entry(char *name, long startPos, int mtype, int level) {
 		fprintf(stderr, "Error seeking in archive: %s\n", strerror(errno));
 		return 0;
 	}
+	/* add header length to uncompressed total */
+	*uncompressedLen += sizeof(fh);
 
 	return (fpos2 - fpos1);
 }
 
-int put_file(char *name, int level) {
+/* put_file returns the compressed length in the function result,
+ * and uncompressed length in output argument.
+ */
+off_t put_file(char *name, off_t *uncompressedLen, int level) {
 	struct stat st;
 	struct infoHdr ih;
 	struct resHdr rh;
@@ -421,6 +453,7 @@ int put_file(char *name, int level) {
 	int fork=0;
 	long tdiff;
 	size_t rlen, dlen;
+	size_t cRLen, cDLen;
 	struct tm *tp;
 	time_t ctime, mtime;
 	long bs;
@@ -435,22 +468,26 @@ int put_file(char *name, int level) {
 	if (safe_write(ofd, &fh, sizeof(fh), "file header") < 0) {
 		return 0;
 	}
+	if (verbose>2) {
+		for (i=0;i<level;i++) { fprintf(stdout, "  "); }
+		fprintf(stdout, "* file header (%lld bytes)\n", (long long)sizeof(fh));
+	}
+	rlen = dlen = cRLen = cDLen = 0;
 
 	/* look for resource fork - try multiple methods */
-	rlen = 0;
 
 	/* Method 1: Try AppleDouble sidecar file */
 	rlen = get_appledouble_rsrc_size(name);
 	if (rlen > 0) {
 		/* Write resource fork data and calculate CRC */
-		clen = read_appledouble_rsrc_with_crc(name, ofd, &crc, updcrc);
-		if (clen != rlen) {
+		cRLen = read_appledouble_rsrc_with_crc(name, ofd, &crc, updcrc);
+		if (cRLen != rlen) {
 			fprintf(stderr, "Warning: resource fork size mismatch for %s\n", name);
 		}
 		cp4(rlen, (char*)fh.rLen);
-		cp4(clen, (char*)fh.cRLen);
+		cp4(cRLen, (char*)fh.cRLen);
 		cp2(crc, (char*)fh.rsrcCRC);
-		fh.compRMethod = noComp;
+		fh.compRMethod = (cRLen==rlen) ? noComp : lzwComp;
 		fork++;
 	}
 
@@ -462,11 +499,11 @@ int put_file(char *name, int level) {
 		}
 		if (stat(nbuf,&st)==0 && st.st_size) {
 			rlen = st.st_size;
-			dofork(nbuf,0);
+			cRLen = dofork(nbuf,0);
 			cp4(st.st_size,(char*)fh.rLen);
-			cp4(clen,(char*)fh.cRLen);
+			cp4(cRLen,(char*)fh.cRLen);
 			cp2(crc,(char*)fh.rsrcCRC);
-			fh.compRMethod = noComp;
+			fh.compRMethod = (cRLen==rlen) ? noComp : lzwComp;
 			fork++;
 		}
 		if (rmfiles) unlink(nbuf);	/* ignore errors */
@@ -481,11 +518,11 @@ int put_file(char *name, int level) {
 		}
 		if (stat(nbuf,&st)==0 && st.st_size) {
 			rlen = st.st_size;
-			dofork(nbuf,0);
+			cRLen = dofork(nbuf,0);
 			cp4(st.st_size,(char*)fh.rLen);
-			cp4(clen,(char*)fh.cRLen);
+			cp4(cRLen,(char*)fh.cRLen);
 			cp2(crc,(char*)fh.rsrcCRC);
-			fh.compRMethod = noComp;
+			fh.compRMethod = (cRLen==rlen) ? noComp : lzwComp;
 			fork++;
 		}
 	}
@@ -503,13 +540,13 @@ int put_file(char *name, int level) {
 		}
 		stat(nbuf,&st);
 	}
-	dlen = st.st_size;
+	dlen = cDLen = st.st_size;
 	if (st.st_size) {		/* data fork exists */
-		dofork(nbuf,unixf);
+		cDLen = dofork(nbuf,unixf);
 		cp4(st.st_size,(char*)fh.dLen);
-		cp4(clen,(char*)fh.cDLen);
+		cp4(cDLen,(char*)fh.cDLen);
 		cp2(crc,(char*)fh.dataCRC);
-		fh.compDMethod = noComp;
+		fh.compDMethod = (cDLen==dlen) ? noComp : lzwComp;
 		fork++;
 	}
 	if (fork == 0) {
@@ -583,6 +620,14 @@ int put_file(char *name, int level) {
 		if (verbose>1) { for (i=0;i<level;i++) { fprintf(stdout, "  "); } }
 		fprintf(stdout, "%s (%lld bytes) Data:%lld Rsrc:%lld [%s]\n",
 				name,(long long)dlen+rlen,(long long)dlen,(long long)rlen,typecreator);
+		if (verbose>2) {
+			for (i=0;i<level;i++) { fprintf(stdout, "  "); }
+			fprintf(stdout, "Savings: %lld%% (%lld/%lld bytes) Data:%lld/%lld Rsrc:%lld/%lld\n",
+					(long long)100-(((cDLen+cRLen)*100)/(dlen+rlen)),
+					(long long)cDLen+cRLen,(long long)dlen+rlen,
+					(long long)cDLen,(long long)dlen,
+					(long long)cRLen,(long long)rlen);
+		}
 	}
 	crc = updcrc(0,(unsigned char*)&fh,(sizeof fh)-2);
 	cp2(crc,(char*)fh.hdrCRC);
@@ -599,23 +644,29 @@ int put_file(char *name, int level) {
 		fprintf(stderr, "Error seeking in archive: %s\n", strerror(errno));
 		return 0;
 	}
+	*uncompressedLen += rlen + dlen + sizeof(fh);
 
 	return (fpos2 - fpos1);
 }
 
-int dofork(char *name, int convert) {
-	int fd, ufd, tfd;
-	size_t n;
+/* Processes contents of given file, writing compressed data
+ * to the output archive and returning the compressed length.
+ */
+off_t dofork(char *name, int convert) {
+	FILE *fs, *cfs;
+	int fd, ufd;
+	size_t n, clen;
 	char *p;
-	char *tempfilename = "sit+temp";
+	char *cvtfilename = "/tmp/sit+cvt";
+	char *cmpfilename = "/tmp/sit+cmp";
 
 	if ((fd=open(name,O_RDONLY))<0) {
 		perror(name);
 		return 0;
 	}
 	if (convert) {	/* build conversion file */
-		if ((ufd=creat(tempfilename,0644))<0) {
-			perror(tempfilename);
+		if ((ufd=creat(cvtfilename,0644))<0) {
+			perror(cvtfilename);
 			close(fd);
 			return 0;
 		}
@@ -635,32 +686,67 @@ int dofork(char *name, int convert) {
 		crc = updcrc(crc,(unsigned char*)buf,n);
 	}
 	close(fd);
+	if (convert) { close(ufd); }
 
-	if (convert) { /* reopen temp file */
-		close(ufd);
-		if ((tfd=open(tempfilename,O_RDONLY))<0) {
-			perror(tempfilename);
+#if ENABLE_LZW_COMPRESSION
+	/* open file stream for compressed output */
+	if ((cfs=zopen(cmpfilename,"w",14))==NULL) { /* always 14 bits */
+#else
+	/* open file stream for uncompressed output */
+	if ((cfs=fopen(cmpfilename,"w"))==NULL) {
+#endif
+		perror(cmpfilename);
+		return 0;
+	}
+	if (convert) { /* use conversion file as input */
+		if ((fs=fopen(cvtfilename,"r"))==NULL) {
+			perror(cvtfilename);
 			return 0;
 		}
 	}
-	else { /* reopen input file */
-		if ((tfd=open(name,O_RDONLY))<0) {
+	else { /* use original file as input */
+		if ((fs=fopen(name,"r"))==NULL) {
 			perror(name);
 			return 0;
 		}
 	}
-	/* write data to output archive */
+	/* write compressed data to temp file */
+	while ((n=fread(buf,1,BUFSIZ,fs))>0) {
+		if (fwrite(buf, 1, n, cfs) != n) {
+			perror("fork data");
+			fclose(fs);
+			fclose(cfs);
+			return 0;
+		}
+	}
+	fclose(fs);
+	fclose(cfs);
+
+	/* reopen temp file */
+	if ((fd=open(cmpfilename,O_RDONLY))<0) {
+		perror(cmpfilename);
+		return 0;
+	}
+	/* write temp file to output archive */
 	clen = 0;
-	while ((n=read(tfd,buf,BUFSIZ))>0) {
+#if ENABLE_LZW_COMPRESSION
+	/* skip past initial 3-byte compress header (1f 9d 8e) */
+	if (lseek(fd,3L,SEEK_SET) < 0) {
+		fprintf(stderr, "Error seeking in compressed data: %s\n", strerror(errno));
+		return 0;
+	}
+#endif
+	while ((n=read(fd,buf,BUFSIZ))>0) {
 		if (safe_write(ofd, buf, n, "fork data") < 0) {
-			close(tfd);
+			close(fd);
 			return 0;
 		}
 		clen += n;
 	}
-	close(tfd);
-	unlink(tempfilename); /* ignore error */
-	return 0;
+	close(fd);
+	unlink(cvtfilename); /* ignore error */
+	unlink(cmpfilename); /* ignore error */
+	return clen;
 }
 
 void cp2(uint16_t x, char *dest) {
