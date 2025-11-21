@@ -84,9 +84,7 @@ typedef unsigned short ushort;
 /* Mac time of 00:00:00 GMT, Jan 1, 1970 */
 #define TIMEDIFF 0x7c25b080
 
-/* Number of bits to use for LZW compression */
-#define CMPBITS 14
-#define ENABLE_LZW_COMPRESSION 0
+#define ENABLE_LZW_COMPRESSION 1
 
 /* Platform compatibility macros */
 #ifdef __APPLE__
@@ -655,7 +653,6 @@ off_t put_file(char *name, off_t *uncompressedLen, int level) {
  * to the output archive and returning the compressed length.
  */
 off_t dofork(char *name, int convert) {
-	struct stat st;
 	FILE *fs, *cfs;
 	int fd, ufd;
 	size_t n, clen;
@@ -693,7 +690,7 @@ off_t dofork(char *name, int convert) {
 
 #if ENABLE_LZW_COMPRESSION
 	/* open file stream for compressed output */
-	if ((cfs=zopen(cmpfilename,"w",CMPBITS))==NULL) {
+	if ((cfs=zopen(cmpfilename,"w",14))==NULL) { /* always 14 bits */
 #else
 	/* open file stream for uncompressed output */
 	if ((cfs=fopen(cmpfilename,"w"))==NULL) {
@@ -724,12 +721,21 @@ off_t dofork(char *name, int convert) {
 	}
 	fclose(fs);
 	fclose(cfs);
-	/* write temp file to output archive */
-	if (stat(cmpfilename,&st)<0 || (fd=open(cmpfilename,O_RDONLY))<0) {
+
+	/* reopen temp file */
+	if ((fd=open(cmpfilename,O_RDONLY))<0) {
 		perror(cmpfilename);
 		return 0;
 	}
+	/* write temp file to output archive */
 	clen = 0;
+#if ENABLE_LZW_COMPRESSION
+	/* skip past initial 3-byte compress header (1f 9d 8e) */
+	if (lseek(fd,3L,SEEK_SET) < 0) {
+		fprintf(stderr, "Error seeking in compressed data: %s\n", strerror(errno));
+		return 0;
+	}
+#endif
 	while ((n=read(fd,buf,BUFSIZ))>0) {
 		if (safe_write(ofd, buf, n, "fork data") < 0) {
 			close(fd);

@@ -74,7 +74,8 @@ __FBSDID("$FreeBSD$");
 #include <unistd.h>
 #include "zopen.h"
 
-#define STUFFIT	1
+#define STUFFIT
+
 #ifdef STUFFIT
 /* modified parameters for use with StuffIt */
 #define	BITS		14		/* Default bits. */
