@@ -414,7 +414,6 @@ off_t put_folder_entry(char *name, off_t startPos, off_t *uncompressedLen, int m
 	}
 	if (mtype==endFolder) {
 		fh.compRMethod = fh.compDMethod = startFolder; /* fix up startFolder entry */
-		cp4(*uncompressedLen,(char*)fh.dLen);
 		crc = updcrc(0,(unsigned char*)&fh,(sizeof(fh))-2);
 		cp2(crc,(char*)fh.hdrCRC);
 		if (lseek(ofd,startPos,SEEK_SET) < 0) {
@@ -722,6 +721,7 @@ off_t dofork(char *name, int convert) {
 	}
 	fclose(fs);
 	fclose(cfs);
+	unlink(cvtfilename); /* ignore error */
 
 	/* reopen temp file */
 	if ((fd=open(cmpfilename,O_RDONLY))<0) {
@@ -746,7 +746,6 @@ off_t dofork(char *name, int convert) {
 		clen += n;
 	}
 	close(fd);
-	unlink(cvtfilename); /* ignore error */
 	unlink(cmpfilename); /* ignore error */
 	return clen;
 }
