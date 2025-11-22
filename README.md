@@ -23,12 +23,16 @@ The `-u` option converts all linefeeds (`'\n'`) to carriage returns (`'\r'`) in 
 
 **Examples**
 
-	# create "archive.sit" containing three specified files
-	sit file1 file2 file3
-	# create "FolderArchive.sit" containing FolderToBeArchived
-	sit -o FolderArchive.sit FolderToBeArchived
-	# specify that untyped files are JPEG and open in GraphicConverter
-	sit -o jpgArchive.sit -T JPEG -C GKON *.jpg
+```bash
+# create "archive.sit" containing three specified files
+sit file1 file2 file3
+
+# create "FolderArchive.sit" containing FolderToBeArchived
+sit -o FolderArchive.sit FolderToBeArchived
+
+# specify that untyped files are JPEG and open in GraphicConverter
+sit -o jpgArchive.sit -T JPEG -C GKON *.jpg
+```
 
 **Building**
 
@@ -43,7 +47,7 @@ This should build cleanly on any Unix system with developer tools installed. On 
 
 Unlike StuffIt, this program does not currently offer a choice of compression algorithms to use. LZW is supported and used by default to compress archives. While LZW compression offers significant savings, Huffman compression was also supported by StuffIt 1.5.1, and may offer additional savings for some files. The possibility of adding Huffman encoding is being investigated for a future update.
 
-This program is known to compile and run on macOS systems (Snow Leopard 10.6 or later). While it is intended that the software should be able to compile and run on any UNIX system, it currently may not obtain file creation dates properly on certain systems whose stat structure does not contain a `st_birthtime` field, as this is not yet part of a POSIX standard. This is also being investigated for a future update.
+This program is known to compile and run on macOS systems (Snow Leopard 10.6 or later). While it is intended that the software should be able to compile and run on any UNIX system, it currently may not obtain file creation dates properly on certain systems whose `stat` structure does not contain a `st_birthtime` field, as this is not yet part of a POSIX standard.
 
 This software may contain bugs. Use at your own risk.
 
