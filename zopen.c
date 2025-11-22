@@ -37,8 +37,10 @@
 static char sccsid[] = "@(#)zopen.c	8.1 (Berkeley) 6/27/93";
 #endif /* LIBC_SCCS and not lint */
 
+#ifdef __FreeBSD__
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
+#endif
 
 /*-
  * fcompress.c - File compression ala IEEE Computer, June 1984.
@@ -67,12 +69,25 @@ __FBSDID("$FreeBSD$");
 
 #include <ctype.h>
 #include <errno.h>
+
+/* EFTYPE is BSD-specific; use EINVAL on other platforms */
+#ifndef EFTYPE
+#define EFTYPE EINVAL
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "zopen.h"
+
+/*
+ * funopen() is BSD-specific. On Linux/glibc, use fopencookie() instead.
+ * The function signatures differ slightly between the two APIs.
+ */
+#if defined(__linux__) || defined(__GLIBC__)
+#define USE_FOPENCOOKIE 1
+#endif
 
 #define STUFFIT
 
@@ -211,9 +226,18 @@ static int	cl_block(struct s_zstate *);
 static void	cl_hash(struct s_zstate *, count_int);
 static code_int	getcode(struct s_zstate *);
 static int	output(struct s_zstate *, code_int);
+
+#ifdef USE_FOPENCOOKIE
+/* Linux/glibc fopencookie uses different signatures */
+static ssize_t	zread(void *, char *, size_t);
+static ssize_t	zwrite(void *, const char *, size_t);
+static int	zclose(void *);
+#else
+/* BSD funopen signatures */
 static int	zclose(void *);
 static int	zread(void *, char *, int);
 static int	zwrite(void *, const char *, int);
+#endif
 
 /*-
  * Algorithm from "A Technique for High Performance Data Compression",
@@ -241,8 +265,13 @@ static int	zwrite(void *, const char *, int);
  * file size for noticeable speed improvement on small files.  Please direct
  * questions about this implementation to ames!jaw.
  */
+#ifdef USE_FOPENCOOKIE
+static ssize_t
+zwrite(void *cookie, const char *wbp, size_t num)
+#else
 static int
 zwrite(void *cookie, const char *wbp, int num)
+#endif
 {
 	code_int i;
 	int c, disp;
@@ -462,8 +491,13 @@ output(struct s_zstate *zs, code_int ocode)
  * compressed file.  The tables used herein are shared with those of the
  * compress() routine.  See the definitions above.
  */
+#ifdef USE_FOPENCOOKIE
+static ssize_t
+zread(void *cookie, char *rbp, size_t num)
+#else
 static int
 zread(void *cookie, char *rbp, int num)
+#endif
 {
 	u_int count;
 	struct s_zstate *zs;
@@ -703,6 +737,9 @@ FILE *
 zopen(const char *fname, const char *mode, int bits)
 {
 	struct s_zstate *zs;
+#ifdef USE_FOPENCOOKIE
+	cookie_io_functions_t io_funcs;
+#endif
 
 	if ((mode[0] != 'r' && mode[0] != 'w') || mode[1] != '\0' ||
 	    bits < 0 || bits > BITS) {
@@ -735,6 +772,20 @@ zopen(const char *fname, const char *mode, int bits)
 		free(zs);
 		return (NULL);
 	}
+#ifdef USE_FOPENCOOKIE
+	memset(&io_funcs, 0, sizeof(io_funcs));
+	io_funcs.close = zclose;
+	switch (*mode) {
+	case 'r':
+		zmode = 'r';
+		io_funcs.read = zread;
+		return (fopencookie(zs, mode, io_funcs));
+	case 'w':
+		zmode = 'w';
+		io_funcs.write = zwrite;
+		return (fopencookie(zs, mode, io_funcs));
+	}
+#else
 	switch (*mode) {
 	case 'r':
 		zmode = 'r';
@@ -743,6 +794,7 @@ zopen(const char *fname, const char *mode, int bits)
 		zmode = 'w';
 		return (funopen(zs, NULL, zwrite, NULL, zclose));
 	}
+#endif
 	/* NOTREACHED */
 	return (NULL);
 }
