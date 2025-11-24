@@ -55,6 +55,9 @@ This software may contain bugs. Use at your own risk.
 
 This version of `sit` has been enhanced to work on Linux and other Unix systems. On non-macOS platforms, resource forks and file metadata can be provided using the AppleDouble file format in both `._filename` or `.rsrc` sidecars. They can also be provided with the `.rsrc` and `.info` files which are output by the `xbin` program.
 
+**License and Credits**
+
+This code is derived from software written in 1988 by Tom Bereiter, derived in turn from earlier work by Allan G. Weber and Dave Johnson. All contributions and modifications are available in this repository under the terms of the simplified BSD 2-Clause license, except where files explicitly require the BSD 3-Clause license in their header. The terms of the original 1988 code were simply "use at your own risk."
 
 ---
 
