@@ -159,6 +159,7 @@ off_t dofork(char *name, int convert);
 void cp2(uint16_t x, char *dest);
 void cp4(uint32_t x, char *dest);
 void convertFilesystemNameToMacRoman(char *fsName, char *macName, int maxLength);
+int create_file(char *path);
 
 int main(int argc, char **argv) {
 	int i;
@@ -198,12 +199,12 @@ int main(int argc, char **argv) {
 			exit(1);
 	}
 
-	if (verbose) {
-		fprintf(stdout, "Creating archive file \"%s\"\n", defoutfile);
-	}
-	if ((ofd=creat(defoutfile,0644))<0) {
+	if ((ofd=create_file(defoutfile))<0) {
 		perror(defoutfile);
 		exit(1);
+	}
+	if (verbose) {
+		fprintf(stdout, "Creating archive file \"%s\"\n", defoutfile);
 	}
 	/* empty header, will seek back and fill in later */
 	if (safe_write(ofd, &sh, sizeof(sh), "archive header") < 0) {
@@ -836,4 +837,37 @@ void convertFilesystemNameToMacRoman(char *fsName, char *macName, int maxLength)
 		remaining -= 1;
 	}
 	memcpy(macName,tmp,tmp[0]+1);
+}
+
+/* Create a unique file path based on the input path, incrementing the
+ * suffix number until we get a name that doesn't already exist.
+ */
+int create_file(char *path) {
+	struct stat st;
+	if (stat(path,&st)!=0) {
+		return creat(path,0644); /* normal case */
+	}
+	int startlen = strlen(path);
+	char *name = malloc(startlen);
+	memcpy(name,path,startlen);
+	if (startlen > 3 && name[startlen-4]=='.' &&
+		(name[startlen-3]=='S' || name[startlen-3]=='s') &&
+		(name[startlen-2]=='I' || name[startlen-2]=='i') &&
+		(name[startlen-1]=='T' || name[startlen-1]=='t')) {
+		name[startlen-4] = 0; /* chop off extension */
+	}
+	int n = 1; /* initial value of suffix */
+	int maxlen = startlen + 1 + 4 + 4; /* name + hyphen + 4 digit max + extension */
+	char *buf = malloc(maxlen);
+	while (n < 1000) {
+		snprintf(buf, maxlen, "%s-%d.sit", name, n++);
+		if (stat(buf,&st)!=0) {
+			defoutfile = buf; /* keep it allocated */
+			free(name);
+			return creat(buf,0644);
+		}
+	}
+	free(name);
+	free(buf);
+	return -1;
 }
