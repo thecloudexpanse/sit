@@ -81,11 +81,27 @@ typedef unsigned short ushort;
 
 #define ENABLE_LZW_COMPRESSION 1
 
+#define HAVE_XATTRS 1
+#ifdef HAVE_XATTRS
+#include <sys/xattr.h>
+#endif
+
 /* Platform compatibility macros */
 #ifdef __APPLE__
 #define HAVE_BIRTHTIME 1
 #define HAVE_NAMEDFORK 1
 #endif
+
+/* Get FinderInfo extended attribute value portably */
+static ssize_t get_finderinfo_xattr(char *name, char *ioBuf, size_t bufLen) {
+	size_t length;
+#if defined(__APPLE__)
+	length = getxattr((const char *)name, "com.apple.FinderInfo", ioBuf, bufLen, 0, 0);
+#else /* standard C library version has 2 fewer arguments. sigh. */
+	length = getxattr((const char *)name, "com.apple.FinderInfo", ioBuf, bufLen);
+#endif
+	return length;
+}
 
 /* Get timezone offset portably */
 static long get_timezone_offset(void) {
@@ -576,15 +592,30 @@ off_t put_file(char *name, off_t *uncompressedLen, int level) {
 		strncpy((char*)fh.fType, Type ? Type : "TEXT", 4);
 		strncpy((char*)fh.fCreator, Creator ? Creator : "KAHL", 4);
 
-		/* Try AppleDouble metadata first */
-		if (read_appledouble_metadata(name, &ad_meta) == 0) {
-			strncpy((char*)fh.fType, ad_meta.type, 4);
-			strncpy((char*)fh.fCreator, ad_meta.creator, 4);
-			strncpy((char*)fh.FndrFlags, ad_meta.flags, 2);
-			have_metadata = 1;
+#ifdef HAVE_XATTRS
+		/* Try reading com.apple.FinderInfo extended attribute */
+		if (!have_metadata) {
+			char xbuf[32];
+			size_t length = get_finderinfo_xattr(name, xbuf, sizeof(xbuf));
+			if (length == sizeof(xbuf)) {
+				strncpy((char*)fh.fType, &xbuf[0], 4);
+				strncpy((char*)fh.fCreator, &xbuf[4], 4);
+				strncpy((char*)fh.FndrFlags, &xbuf[8], 2);
+				have_metadata = 1;
+			}
+		}
+#endif
+		/* Try AppleDouble metadata if extended attribute not found */
+		if (!have_metadata) {
+			if (read_appledouble_metadata(name, &ad_meta) == 0) {
+				strncpy((char*)fh.fType, ad_meta.type, 4);
+				strncpy((char*)fh.fCreator, ad_meta.creator, 4);
+				strncpy((char*)fh.FndrFlags, ad_meta.flags, 2);
+				have_metadata = 1;
+			}
 		}
 #ifdef HAVE_NAMEDFORK
-		/* Try reading from macOS named fork if AppleDouble didn't work */
+		/* Try reading from macOS named fork if previous methods didn't work */
 		if (!have_metadata) {
 			if (snprintf(nbuf, sizeof(nbuf), "%s/..namedfork/rsrc", name) >= sizeof(nbuf)) {
 				fprintf(stderr, "Warning: path too long for resource fork metadata: %s\n", name);
